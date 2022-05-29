@@ -14,6 +14,7 @@ import (
 	"sort"
 
 	"github.com/google/codesearch/index"
+	"github.com/stonewell/codesearch/vcs_ignore"
 )
 
 var usageMessage = `usage: cindex [-list] [-reset] [path...]
@@ -41,7 +42,7 @@ itself is a useful command to run in a nightly cron job.
 
 The -list flag causes cindex to list the paths it has indexed and exit.
 
-By default cindex adds the named paths to the index but preserves 
+By default cindex adds the named paths to the index but preserves
 information about other paths that might already be indexed
 (the ones printed by cindex -list).  The -reset flag causes cindex to
 delete the existing index before indexing the new paths.
@@ -124,8 +125,15 @@ func main() {
 	ix := index.Create(file)
 	ix.Verbose = *verboseFlag
 	ix.AddPaths(args)
+
+	vcs_ignore_map := make(map[string]*vcs_ignore.VCSIgnore)
+
 	for _, arg := range args {
 		log.Printf("index %s", arg)
+
+		vcs_ignore_root := vcs_ignore.NewVCSIgnore(arg, nil)
+		vcs_ignore_map[arg] = vcs_ignore_root
+
 		filepath.Walk(arg, func(path string, info os.FileInfo, err error) error {
 			if _, elem := filepath.Split(path); elem != "" {
 				// Skip various temporary or "hidden" files or directories.
@@ -140,8 +148,23 @@ func main() {
 				log.Printf("%s: %s", path, err)
 				return nil
 			}
+
+			if info != nil && info.IsDir() {
+				parent_path := filepath.Dir(path)
+
+				vcs_ignore_parent := vcs_ignore_map[parent_path]
+
+				vcs_ignore_path := vcs_ignore.NewVCSIgnore(path, vcs_ignore_parent)
+
+				vcs_ignore_map[path] = vcs_ignore_path
+			}
+
 			if info != nil && info.Mode()&os.ModeType == 0 {
-				ix.AddFile(path)
+				vcs_ignore_path := vcs_ignore_map[filepath.Dir(path)]
+
+				if !vcs_ignore_path.ShouldIgnorePath(path) {
+					ix.AddFile(path)
+				}
 			}
 			return nil
 		})
